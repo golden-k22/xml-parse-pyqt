@@ -35,6 +35,11 @@ class XMLMerger(QMainWindow):
         self.btn_merge.setEnabled(False)  # Initially disable the button
         self.left_layout.addWidget(self.btn_merge)
 
+        self.btn_push = QPushButton('Push Changes to Git', self)
+        self.btn_push.clicked.connect(self.push_changes_to_git)
+        self.btn_push.setEnabled(False)  # Initially disable the button
+        self.left_layout.addWidget(self.btn_push)
+
         self.selected_files_text = QTextEdit(self)
         self.selected_files_text.setReadOnly(True)
         self.left_layout.addWidget(self.selected_files_text)
@@ -53,6 +58,7 @@ class XMLMerger(QMainWindow):
         self.selected_files = []       
         self.repo = None
         self.cloned_repo_path = None
+        self.merged_file_paths = []
 
     def clone_repository(self):
         repo_url, ok = QInputDialog.getText(self, 'Clone Repository', 'Enter GitHub repository URL:')
@@ -79,20 +85,11 @@ class XMLMerger(QMainWindow):
             self.selected_files_text.setPlainText('\n'.join(files))
 
     def mergeXMLFiles(self):
-        if not self.selected_files:
+        if not self.selected_files or len(self.selected_files) < 2:
             QMessageBox.warning(self, 'No Files Selected', 'Please select at least two XML files to merge.')
             return
 
         try:
-            # Start with the root of the first file
-            first_tree = ET.parse(self.selected_files[0])
-            root = first_tree.getroot()
-
-            for file in self.selected_files[1:]:
-                tree = ET.parse(file)
-                for elem in tree.getroot():
-                    root.append(elem)
-
             # Prompt the user to enter the file name
             file_name, ok = QInputDialog.getText(self, 'Save Merged File', 'Enter the file name for the merged XML file:')
             if not ok or not file_name.strip():
@@ -103,28 +100,46 @@ class XMLMerger(QMainWindow):
             if not file_name.endswith('.xml'):
                 file_name += '.xml'
 
-            # Write the merged XML to the specified file in the cloned repository
+            # Merge XML files without a new root element
             merged_file_path = os.path.join(self.cloned_repo_path, 'Completed Objects', file_name)
             os.makedirs(os.path.dirname(merged_file_path), exist_ok=True)  # Ensure the directory exists
-            first_tree.write(merged_file_path, encoding='utf-8', xml_declaration=True)
+
+            self.merge_xml_files_without_root(self.selected_files, merged_file_path)
+            self.merged_file_paths.append(merged_file_path)  # Track the merged file
 
             # Update the text area with the merged XML content
-            xml_str = ET.tostring(root, encoding='utf-8')
-            pretty_xml_str = minidom.parseString(xml_str).toprettyxml(indent="    ")
-            self.text_area.setPlainText(pretty_xml_str)
+            with open(merged_file_path, 'r', encoding='utf-8') as f:
+                merged_content = f.read()
+            self.text_area.setPlainText(merged_content)
 
-            # Commit and push changes
-            self.commit_and_push_changes(merged_file_path)
+            # Enable the push button after merging
+            self.btn_push.setEnabled(True)
 
-            # QMessageBox.information(self, 'Success', 'XML files merged successfully!')
+            QMessageBox.information(self, 'Success', 'XML files merged successfully!')
 
         except Exception as e:
             QMessageBox.critical(self, 'Error', f'An error occurred: {str(e)}')
 
+    def merge_xml_files_without_root(self, file_paths, output_path):
+        with open(output_path, 'w', encoding='utf-8') as output_file:
+            # Write the XML declaration to the output file
+            output_file.write('<?xml version="1.0" encoding="UTF-8"?>\n')
+            
+            for file_path in file_paths:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    content = f.read().strip()
+                    if content.startswith('<?xml'):
+                        content = content[content.find('?>') + 2:].strip()
+                    output_file.write(content + '\n')
 
-    def commit_and_push_changes(self, file_path):
+    def push_changes_to_git(self):
+        if not self.merged_file_paths:
+            QMessageBox.warning(self, 'No Merged File', 'There are no merged files to push.')
+            return
+
         try:
-            self.repo.git.add(file_path)
+            for file_path in self.merged_file_paths:
+                self.repo.git.add(file_path)
             self.repo.index.commit("Merged XML files")
             origin = self.repo.remote(name='origin')
             origin.push()
