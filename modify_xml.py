@@ -97,7 +97,7 @@ class XMLModifier(QMainWindow):
             text_hbox = QHBoxLayout()
 
             if not elem.text or not elem.text.strip():
-                continue
+                self.scroll_layout.addLayout(hbox)
             else:
                 text_label = QLabel("Text")
                 text_input = QLineEdit(elem.text if elem.text else "")
@@ -132,6 +132,7 @@ class XMLModifier(QMainWindow):
 
                 self.scroll_layout.addLayout(tail_hbox)
                 self.input_fields[(elem, 'tail')] = [tail_label, tail_input]
+
 
     def find_parent(self, root, child):
         for parent in root.iter():
