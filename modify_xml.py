@@ -51,6 +51,7 @@ class XMLModifier(QMainWindow):
         self.xml_tree = None
         self.xml_root = None
         self.input_fields = {}
+        self.removed_elements = {}
 
         # Set the working directory to the directory of the executable
         if hasattr(sys, '_MEIPASS'):
@@ -87,19 +88,17 @@ class XMLModifier(QMainWindow):
             if elem == self.xml_root or elem.tag in ["title", "compbody", "thead", "tgroup", "table"]:
                 continue
 
-            # Editable elements if text is not empty
-            remove_button = QPushButton("Remove Element")
-            remove_button.clicked.connect(lambda _, e=elem: self.remove_element(e))
+            # Create a button that can toggle between "Remove Element" and "Add Element"
+            action_button = QPushButton("Remove Element")
+            action_button.clicked.connect(lambda _, e=elem, btn=action_button: self.toggle_element(e, btn))
             hbox.addWidget(element_label)
-            hbox.addWidget(remove_button)
+            hbox.addWidget(action_button)
 
             text_hbox = QHBoxLayout()
 
-            # Check if the text is empty
             if not elem.text or not elem.text.strip():
-                # text_input.setReadOnly(True)  # Make non-editable if empty
                 continue
-            else:                
+            else:
                 text_label = QLabel("Text")
                 text_input = QLineEdit(elem.text if elem.text else "")
                 text_input.textChanged.connect(lambda text, e=elem: self.modify_text(e, text))
@@ -108,10 +107,9 @@ class XMLModifier(QMainWindow):
 
                 self.scroll_layout.addLayout(hbox)
                 self.scroll_layout.addLayout(text_hbox)
-                self.input_fields[elem] = [element_label, remove_button, text_label, text_input]
+                self.input_fields[elem] = [element_label, action_button, text_label, text_input]
 
             for attr, value in elem.attrib.items():
-                # Skip specific attributes from being displayed
                 if attr in ["outputclass", "rowsep", "colsep", "cols"]:
                     continue
 
@@ -124,7 +122,6 @@ class XMLModifier(QMainWindow):
                 self.scroll_layout.addLayout(attr_hbox)
                 self.input_fields[(elem, attr)] = [attr_label, attr_input]
 
-            # Handle tail text
             if elem.tail and elem.tail.strip():
                 tail_hbox = QHBoxLayout()
                 tail_label = QLabel("Tail Text")
@@ -143,12 +140,31 @@ class XMLModifier(QMainWindow):
                     return parent
         return None
 
-    def remove_element(self, element):
+    def toggle_element(self, element, action_button):
+        if action_button.text() == "Remove Element":
+            self.remove_element(element, action_button)
+        else:
+            self.add_element(element, action_button)
+
+    def remove_element(self, element, action_button):
         parent = self.find_parent(self.xml_root, element)
         if parent is not None:
+            # Save the element and its parent
+            self.removed_elements[element.tag] = (parent, element)
             parent.remove(element)
-            self.populate_fields()
             self.update_text_area()
+            # Change button text to "Add Element"
+            action_button.setText("Add Element")
+
+    def add_element(self, element, action_button):
+        tag = element.tag
+        if tag in self.removed_elements:
+            parent, old_element = self.removed_elements[tag]
+            parent.append(old_element)  # Directly append the old element back
+            del self.removed_elements[tag]  # Remove the element from removed elements
+            self.update_text_area()
+            # Change button text back to "Remove Element"
+            action_button.setText("Remove Element")
 
     def modify_text(self, element, text):
         element.text = text
@@ -168,7 +184,6 @@ class XMLModifier(QMainWindow):
             self.save_xml(file_path)
 
     def save_xml(self, file_path):
-        # Save the current state of the XML tree to the file
         self.xml_tree.write(file_path, encoding='utf-8', xml_declaration=True)
         QMessageBox.information(self, "Success", "File saved successfully")
 
