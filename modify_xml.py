@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt
 import xml.etree.ElementTree as ET
 import xml.dom.minidom as minidom
-
+from functools import partial
 
 class XMLModifier(QMainWindow):
     def __init__(self):
@@ -66,6 +66,9 @@ class XMLModifier(QMainWindow):
 
     def load_xml(self, file_path):
         try:
+            # Clear existing UI elements and reset state
+            self.clear_fields()
+
             self.xml_tree = ET.parse(file_path)
             self.xml_root = self.xml_tree.getroot()
             self.populate_fields()
@@ -74,13 +77,46 @@ class XMLModifier(QMainWindow):
         except ET.ParseError as e:
             QMessageBox.critical(self, "Error", f"Failed to parse XML file: {e}")
 
-    def populate_fields(self):
-        # Clear existing input fields
-        for field in self.input_fields.values():
-            for widget in field:
-                widget.deleteLater()
-        self.input_fields = {}
+    def clear_layout(self, layout):
+         if layout is not None:
+            while layout.count():
+                item = layout.takeAt(0)
+                widget = item.widget()
+                if widget is not None:
+                    widget.deleteLater()
+                else:
+                    # If the item is a layout itself (like another QHBoxLayout), clear it recursively
+                    sub_layout = item.layout()
+                    if sub_layout is not None:
+                        self.clear_layout(sub_layout)
+            layout.deleteLater()  # Finally, delete the layout itself
 
+
+    def clear_fields(self):
+        # Clear the scroll layout (remove all existing widgets and layouts)
+        for i in reversed(range(self.scroll_layout.count())):
+            item = self.scroll_layout.takeAt(i)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+            else:
+                layout = item.layout()
+                if layout is not None:
+                    self.clear_layout(layout)  # Clear nested layouts
+
+        # Clear the input fields and removed elements dictionaries
+        self.input_fields.clear()
+        self.removed_elements.clear()
+
+        # Reset the text area content
+        self.text_area.clear()
+
+        # Disable the save button until a new file is loaded
+        self.save_button.setEnabled(False)
+
+
+
+    def populate_fields(self):
         for elem in self.xml_root.iter():
             hbox = QHBoxLayout()
             element_label = QLabel(f"Element: {elem.tag}")
@@ -88,9 +124,8 @@ class XMLModifier(QMainWindow):
             if elem == self.xml_root or elem.tag in ["title", "compbody", "thead", "tgroup", "table"]:
                 continue
 
-            # Create a button that can toggle between "Remove Element" and "Add Element"
             action_button = QPushButton("Remove Element")
-            action_button.clicked.connect(lambda _, e=elem, btn=action_button: self.toggle_element(e, btn))
+            action_button.clicked.connect(partial(self.toggle_element, elem, action_button))
             hbox.addWidget(element_label)
             hbox.addWidget(action_button)
 
@@ -101,7 +136,7 @@ class XMLModifier(QMainWindow):
             else:
                 text_label = QLabel("Text")
                 text_input = QLineEdit(elem.text if elem.text else "")
-                text_input.textChanged.connect(lambda text, e=elem: self.modify_text(e, text))
+                text_input.textChanged.connect(partial(self.modify_text, elem))
                 text_hbox.addWidget(text_label)
                 text_hbox.addWidget(text_input)
 
@@ -116,7 +151,7 @@ class XMLModifier(QMainWindow):
                 attr_hbox = QHBoxLayout()
                 attr_label = QLabel(attr)
                 attr_input = QLineEdit(value)
-                attr_input.textChanged.connect(lambda text, e=elem, a=attr: self.modify_attribute(e, a, text))
+                attr_input.textChanged.connect(partial(self.modify_attribute, elem, attr))
                 attr_hbox.addWidget(attr_label)
                 attr_hbox.addWidget(attr_input)
                 self.scroll_layout.addLayout(attr_hbox)
@@ -126,13 +161,12 @@ class XMLModifier(QMainWindow):
                 tail_hbox = QHBoxLayout()
                 tail_label = QLabel("Tail Text")
                 tail_input = QLineEdit(elem.tail)
-                tail_input.textChanged.connect(lambda text, e=elem: self.modify_tail_text(e, text))
+                tail_input.textChanged.connect(partial(self.modify_tail_text, elem))
                 tail_hbox.addWidget(tail_label)
                 tail_hbox.addWidget(tail_input)
 
                 self.scroll_layout.addLayout(tail_hbox)
                 self.input_fields[(elem, 'tail')] = [tail_label, tail_input]
-
 
     def find_parent(self, root, child):
         for parent in root.iter():
@@ -150,22 +184,33 @@ class XMLModifier(QMainWindow):
     def remove_element(self, element, action_button):
         parent = self.find_parent(self.xml_root, element)
         if parent is not None:
-            # Save the element and its parent
-            self.removed_elements[element.tag] = (parent, element)
+            if element.tag not in self.removed_elements:
+                self.removed_elements[element.tag] = []
+            index = list(parent).index(element)  # Get the index of the element within its parent
+            self.removed_elements[element.tag].append((parent, element, index))
             parent.remove(element)
             self.update_text_area()
-            # Change button text to "Add Element"
             action_button.setText("Add Element")
+
 
     def add_element(self, element, action_button):
         tag = element.tag
-        if tag in self.removed_elements:
-            parent, old_element = self.removed_elements[tag]
-            parent.append(old_element)  # Directly append the old element back
-            del self.removed_elements[tag]  # Remove the element from removed elements
+        if tag in self.removed_elements and self.removed_elements[tag]:
+            parent, old_element, index = self.removed_elements[tag].pop(0)  # Get the first removed element
+            # Reinsert at the correct position
+            children = list(parent)
+            if index <= len(children):
+                parent.insert(index, old_element)
+            else:
+                parent.append(old_element)  # Fallback if index is out of range
             self.update_text_area()
-            # Change button text back to "Remove Element"
             action_button.setText("Remove Element")
+
+            # If there are no more removed elements of this tag, remove the entry
+            if not self.removed_elements[tag]:
+                del self.removed_elements[tag]
+
+
 
     def modify_text(self, element, text):
         element.text = text
